@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>睡眠姿势分析系统</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="./css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>睡眠姿势分析系统</h1>
+            <p>热力图展示 · 区域划分 · 识别结果分析</p>
+        </header>
+
+        <div class="controls">
+            <div class="control-group">
+                <label for="personSelect">选择人员：</label>
+                <select id="personSelect" class="form-control">
+                    <option value="">-- 请选择人员 --</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="postureSelect">选择姿势：</label>
+                <select id="postureSelect" class="form-control">
+                    <option value="">-- 请选择姿势 --</option>
+                </select>
+            </div>
+            <div class="control-action">
+                <button id="analyzeBtn" class="btn-primary">
+                    <i class="fas fa-play"></i> 开始分析
+                </button>
+            </div>
+        </div>
+
+        <div class="modules-container">
+            <!-- 第一个模块：热力图展示 -->
+            <div class="module" id="heatmapModule">
+                <div class="module-header">
+                    <h2><i class="fas fa-fire"></i> 热力图展示</h2>
+                    <div class="module-status" id="heatmapStatus">
+                        <span class="status-pending">等待分析</span>
+                    </div>
+                </div>
+                <div class="module-content">
+                    <div class="image-container">
+                        <img id="heatmapImage" src="" alt="热力图将在这里显示" class="result-image">
+                        <div class="image-placeholder" id="heatmapPlaceholder">
+                            <i class="fas fa-chart-heatmap fa-5x"></i>
+                            <p>点击"开始分析"按钮，后端将生成热力图</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 第二个模块：区域划分结果 -->
+            <div class="module" id="regionModule">
+                <div class="module-header">
+                    <h2><i class="fas fa-map-marked-alt"></i> 区域划分结果</h2>
+                    <div class="module-status" id="regionStatus">
+                        <span class="status-pending">等待分析</span>
+                    </div>
+                </div>
+                <div class="module-content">
+                    <div class="image-container">
+                        <img id="regionImage" src="" alt="区域划分结果将在这里显示" class="result-image">
+                        <div class="image-placeholder" id="regionPlaceholder">
+                            <i class="fas fa-map fa-5x"></i>
+                            <p>点击"开始分析"按钮，后端将生成区域划分结果</p>
+                            <p class="text-muted">(功能开发中)</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 第三个模块：识别结果 -->
+            <div class="module" id="resultModule">
+                <div class="module-header">
+                    <h2><i class="fas fa-check-circle"></i> 识别结果分析</h2>
+                    <div class="module-status" id="resultStatus">
+                        <span class="status-pending">等待分析</span>
+                    </div>
+                </div>
+                <div class="module-content">
+                    <div class="result-grid">
+                        <div class="result-item expanded">
+                            <h3>姿势识别结果</h3>
+                            <div id="postureResult" class="result-value pending">
+                                <i class="fas fa-spinner fa-spin"></i> 等待分析
+                            </div>
+                        </div>
+                        <div class="result-item expanded">
+                            <h3>人物识别结果</h3>
+                            <div id="personResult" class="result-value pending">
+                                <i class="fas fa-spinner fa-spin"></i> 等待分析
+                            </div>
+                            <p class="text-muted">(功能开发中)</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="./js/main.js"></script>
+</body>
+</html>
+    
