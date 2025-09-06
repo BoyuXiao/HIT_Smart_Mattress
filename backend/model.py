@@ -9,9 +9,10 @@ from sklearn.metrics import accuracy_score, confusion_matrix, classification_rep
 import pygad
 import joblib
 import warnings
+import pickle
 warnings.filterwarnings("ignore")
 
-
+PERSON_LABEL_MAP = {}
 PRESSURE_MAP_SHAPE = (40, 26)  
 DATA_DIR = "data"  
 POSTURE_LABEL_MAP = {i: f"睡姿{i}" for i in range(1, 22)}  
@@ -28,12 +29,20 @@ TEST_SIZE = 0.3
 
 def load_dataset(data_root_dir):
     X_raw = []
-    y_raw = []
+    y_posture = []  # 睡姿标签
+    y_person = []   # 人员标签
+    person_ids = []
+    person_idx = 0
+    
     for person_dir in os.listdir(data_root_dir):
         person_dir_path = os.path.join(data_root_dir, person_dir)
         if not os.path.isdir(person_dir_path):
             continue
             
+        # 为每个人分配唯一ID
+        PERSON_LABEL_MAP[person_idx] = person_dir
+        person_ids.append(person_idx)
+        
         print(f"正在读取 {person_dir} 的数据...")
         for filename in os.listdir(person_dir_path):
             if not filename.endswith(".txt"):
@@ -56,22 +65,28 @@ def load_dataset(data_root_dir):
                     start_idx = i * 40
                     end_idx = start_idx + 40
                     sample = full_data[start_idx:end_idx, :]
-                    # 校验列数（确保26列）
                     if sample.shape[1] != 26:
                         print(f"跳过列数错误文件：{filename}（实际{sample.shape[1]}列，需26列）")
                         break
                     X_raw.append(sample)
-                    y_raw.append(posture_idx)
+                    y_posture.append(posture_idx)
+                    y_person.append(person_idx)  # 添加人员标签
             except Exception as e:
                 print(f"读取文件失败：{filename}，错误：{str(e)}")
                 continue
+        
+        person_idx += 1
     
     X_raw = np.array(X_raw, dtype=np.float32)
-    y_raw = np.array(y_raw, dtype=np.int32)
-    print(f"数据集加载完成：共{len(X_raw)}个样本，{len(np.unique(y_raw))}种睡姿")
-    print(f"各睡姿样本数量：{np.bincount(y_raw)[1:22]}")  
-    return X_raw, y_raw
-
+    y_posture = np.array(y_posture, dtype=np.int32)
+    y_person = np.array(y_person, dtype=np.int32)
+    
+    # 保存人员标签映射
+    with open('backend/models/person_label_map.pkl', 'wb') as f:
+        pickle.dump(PERSON_LABEL_MAP, f)
+    
+    print(f"数据集加载完成：共{len(X_raw)}个样本，{len(np.unique(y_posture))}种睡姿，{len(np.unique(y_person))}个人员")
+    return X_raw, y_posture, y_person
 
 
 def preprocess_pressure_map(pressure_map):
@@ -178,7 +193,7 @@ def optimize_svm_hyperparams(X_train, y_train):
     return best_C, best_gamma
 
 
-def train_and_evaluate_svm(best_C, best_gamma, X_train, X_test, y_train, y_test):
+def train_and_evaluate_svm_p(best_C, best_gamma, X_train, X_test, y_train, y_test):
     X_train_flat = np.array([preprocess_pressure_map(map_) for map_ in X_train])
     X_test_flat = np.array([preprocess_pressure_map(map_) for map_ in X_test])
     
@@ -209,6 +224,55 @@ def train_and_evaluate_svm(best_C, best_gamma, X_train, X_test, y_train, y_test)
     
     return svm_model, accuracy, conf_mat
 
+
+def train_and_evaluate_svm_per(best_C, best_gamma, X_train, X_test, y_train, y_test, label_map):
+    """
+    训练并评估SVM模型，支持动态标签映射
+    
+    参数:
+        best_C: SVM的C参数
+        best_gamma: SVM的gamma参数
+        X_train, X_test: 训练集和测试集特征
+        y_train, y_test: 训练集和测试集标签
+        label_map: 标签映射字典（键为数字标签，值为实际类别名称）
+        model_name: 模型名称（用于输出信息区分）
+    """
+    # 数据预处理（展平压力矩阵）
+    X_train_flat = np.array([preprocess_pressure_map(map_) for map_ in X_train])
+    X_test_flat = np.array([preprocess_pressure_map(map_) for map_ in X_test])
+    
+    # 初始化SVM模型
+    svm_model = SVC(
+        C=best_C, gamma=best_gamma, kernel="rbf", 
+        random_state=42, cache_size=1000
+    )
+    svm_model.fit(X_train_flat, y_train)
+    
+    # 模型评估
+    y_pred = svm_model.predict(X_test_flat)
+    accuracy = accuracy_score(y_test, y_pred)
+    conf_mat = confusion_matrix(y_test, y_pred)
+    
+    # 生成分类报告（动态获取类别名称）
+    # 提取所有唯一标签并排序
+    unique_labels = sorted(np.unique(np.concatenate([y_test, y_pred])))
+    target_names = [label_map[label] for label in unique_labels]
+    
+    class_report = classification_report(
+        y_test, y_pred,
+        target_names=target_names,
+        digits=4
+    )
+    
+    # 输出评估结果
+    print(f"测试集准确率：{accuracy:.4f} ({accuracy*100:.2f}%)")
+    print(f"\n混淆矩阵（行：真实标签，列：预测标签）：")
+    print(conf_mat)
+    print(f"\n分类报告（精确率/召回率/F1）：")
+    print(class_report)
+    
+    return svm_model, accuracy, conf_mat
+
 def predict_single_pressure_map(model, pressure_map):
     """
     预测单张压力图的睡姿类别
@@ -222,6 +286,19 @@ def predict_single_pressure_map(model, pressure_map):
     prediction = model.predict([processed])[0]
     return int(prediction) + 1
 
+def predict_single_person(model, pressure_map):
+    """预测单张压力图的人员类别"""
+    # 预处理（复用现有函数）
+    processed = preprocess_pressure_map(pressure_map)
+    # 预测
+    prediction = model.predict([processed])[0]
+    
+    # 加载人员标签映射
+    with open('backend/models/person_label_map.pkl', 'rb') as f:
+        person_map = pickle.load(f)
+    
+    return person_map.get(int(prediction), "未知人员")
+
 def load_trained_model(model_path="svm_model.pkl"):
     """加载保存的SVM模型"""
     if not os.path.exists(model_path):
@@ -229,31 +306,53 @@ def load_trained_model(model_path="svm_model.pkl"):
     return joblib.load(model_path)
 
 if __name__ == "__main__":
-    # 1. 加载全量数据
-    X_raw, y_raw = load_dataset(DATA_DIR)
-    # 2. 标签编码（1-21→0-20）
-    y_encoded = y_raw - 1  
+    # 1. 加载全量数据，同时获取睡姿和人员标签
+    X_raw, y_posture_raw, y_person_raw = load_dataset(DATA_DIR)
+    
+    # 2. 标签编码
+    y_posture_encoded = y_posture_raw - 1  # 睡姿1-21→0-20
+    y_person_encoded = y_person_raw  # 人员标签已经是0开始的索引
+    
     # 3. 拆分全量训练集和测试集（7:3）
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_raw, y_encoded,
+    # 睡姿模型
+    X_train_p, X_test_p, y_train_p, y_test_p = train_test_split(
+        X_raw, y_posture_encoded,
         test_size=TEST_SIZE,
         random_state=42,
-        stratify=y_encoded,
+        stratify=y_posture_encoded,
         shuffle=True
     )
-    print(f"\n全量数据拆分完成：训练集大小：{len(X_train)}，测试集大小：{len(X_test)}")
     
-    # 4. GA优化超参数（核心提速：独立验证集）
-    # best_C, best_gamma = optimize_svm_hyperparams(X_train, y_train)
-    best_C, best_gamma = 16.5350, 0.5622
-
-    # 5. 训练最终模型并评估
-    svm_model, test_accuracy, conf_mat = train_and_evaluate_svm(
-        best_C, best_gamma, X_train, X_test, y_train, y_test
+    # 人员模型
+    X_train_per, X_test_per, y_train_per, y_test_per = train_test_split(
+        X_raw, y_person_encoded,
+        test_size=TEST_SIZE,
+        random_state=42,
+        stratify=y_person_encoded,
+        shuffle=True
     )
     
-    # 测试集准确率
-    print(f"\n最终测试集准确率：{test_accuracy:.4f} ({test_accuracy*100:.2f}%)")
-
+    print(f"\n全量数据拆分完成：训练集大小：{len(X_train_p)}，测试集大小：{len(X_test_p)}")
+    
+    # 4. 训练睡姿模型
+    print("\n===== 训练睡姿模型 =====")
+    best_C_p, best_gamma_p = 16.5350, 0.5622  # 可以保留现有优化值或重新优化
+    # best_C_p, best_gamma_p = optimize_svm_hyperparams(X_train_p, y_train_p)
+    posture_model, test_accuracy_p, conf_mat_p = train_and_evaluate_svm_p(
+        best_C_p, best_gamma_p, X_train_p, X_test_p, y_train_p, y_test_p
+    )
+    print(f"\n睡姿模型最终测试集准确率：{test_accuracy_p:.4f} ({test_accuracy_p*100:.2f}%)")
+    
+    # 5. 训练人员模型
+    print("\n===== 训练人员模型 =====")
+    best_C_per, best_gamma_per= 92.1882, 15.6079
+    # best_C_per, best_gamma_per = optimize_svm_hyperparams(X_train_per, y_train_per)
+    person_model, test_accuracy_per, conf_mat_per = train_and_evaluate_svm_per(
+        best_C_per, best_gamma_per, X_train_per, X_test_per, y_train_per, y_test_per, PERSON_LABEL_MAP
+    )
+    print(f"\n人员模型最终测试集准确率：{test_accuracy_per:.4f} ({test_accuracy_per*100:.2f}%)")
+    
+    # 保存模型
     os.makedirs('backend/models', exist_ok=True)
-    joblib.dump(svm_model, "backend/models/svm_model.pkl")
+    joblib.dump(posture_model, "backend/models/svm_posture_model.pkl")
+    joblib.dump(person_model, "backend/models/svm_person_model.pkl")

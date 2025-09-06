@@ -4,7 +4,7 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 from matplotlib import cm
-from model import load_trained_model, predict_single_pressure_map
+from model import load_trained_model, predict_single_pressure_map, predict_single_person
 
 
 app = Flask(__name__)
@@ -20,11 +20,14 @@ os.makedirs(HEATMAP_IMAGE_DIR, exist_ok=True)  # 确保目录存在
 
 
 try:
-    model = load_trained_model("backend/models/svm_model.pkl")
-    print("模型加载成功，可进行预测")
+    # 加载两个模型
+    posture_model = load_trained_model("backend/models/svm_posture_model.pkl")
+    person_model = load_trained_model("backend/models/svm_person_model.pkl")
+    print("两个模型加载成功，可进行预测")
 except Exception as e:
     print(f"模型加载失败：{e}")
-    model = None
+    posture_model = None
+    person_model = None
 
 # 接口1：获取所有人员列表（不变）
 @app.route("/api/people", methods=["GET"])
@@ -115,7 +118,7 @@ def serve_heatmap_image(filename):
 # 新增：睡姿预测接口
 @app.route("/api/predict_posture", methods=["POST"])
 def predict_posture():
-    if model is None:
+    if posture_model is None:
         return jsonify({"code": 500, "msg": "模型未加载成功，无法预测"})
     
     data = request.json
@@ -129,7 +132,7 @@ def predict_posture():
             return jsonify({"code": 400, "msg": f"压力矩阵形状错误，应为(40,26)，实际为{pressure_matrix.shape}"})
         
         # 调用预测函数
-        predicted_id = predict_single_pressure_map(model, pressure_matrix)
+        predicted_id = predict_single_pressure_map(posture_model, pressure_matrix)
         return jsonify({
             "code": 200,
             "data": {"predicted_posture_id": predicted_id},
@@ -137,6 +140,33 @@ def predict_posture():
         })
     except Exception as e:
         return jsonify({"code": 500, "msg": f"预测失败：{str(e)}"})
+    
+
+# 新增：人员预测接口
+@app.route("/api/predict_person", methods=["POST"])
+def predict_person():
+    if person_model is None:
+        return jsonify({"code": 500, "msg": "人员模型未加载成功，无法预测"})
+    
+    data = request.json
+    if not data or "matrix" not in data:
+        return jsonify({"code": 400, "msg": "请求缺少压力矩阵数据（matrix字段）"})
+    
+    try:
+        # 转换为numpy矩阵并校验形状
+        pressure_matrix = np.array(data["matrix"], dtype=np.float32)
+        if pressure_matrix.shape != (40, 26):
+            return jsonify({"code": 400, "msg": f"压力矩阵形状错误，应为(40,26)，实际为{pressure_matrix.shape}"})
+        
+        # 调用预测函数
+        predicted_person = predict_single_person(person_model, pressure_matrix)
+        return jsonify({
+            "code": 200,
+            "data": {"predicted_person": predicted_person},
+            "msg": "人员预测成功"
+        })
+    except Exception as e:
+        return jsonify({"code": 500, "msg": f"人员预测失败：{str(e)}"})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

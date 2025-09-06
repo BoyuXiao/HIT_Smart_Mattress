@@ -165,6 +165,19 @@ async function startAnalysis() {
             throw new Error(predictResult.msg || '预测失败');
         }
         
+        const predictPersonRes = await fetch('http://localhost:5000/api/predict_person', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ matrix: pressureData.data.matrix })
+        });
+        if (!predictPersonRes.ok) throw new Error(`人员预测失败: ${predictPersonRes.status}`);
+        const predictPersonResult = await predictPersonRes.json();
+        if (predictPersonResult.code !== 200) {
+            throw new Error(predictPersonResult.msg || '人员预测失败');
+        }
+        
         // 步骤4: 显示区域划分结果（模拟）
         setTimeout(() => {
             regionModule.image.src = `https://picsum.photos/seed/${person}${postureId}/600/400`;
@@ -179,7 +192,7 @@ async function startAnalysis() {
         // 步骤5: 显示预测结果
         setTimeout(() => {
             resultModule.posture.textContent = `姿势${predictResult.data.predicted_posture_id}`; // 使用预测结果
-            resultModule.person.textContent = person;
+            resultModule.person.textContent = predictPersonResult.data.predicted_person;
             resultModule.status.innerHTML = '<span class="status-ready">分析完成</span>';
         }, 1500);
         
