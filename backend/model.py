@@ -82,7 +82,8 @@ def load_dataset(data_root_dir):
     y_person = np.array(y_person, dtype=np.int32)
     
     # 保存人员标签映射
-    with open('backend/models/person_label_map.pkl', 'wb') as f:
+    # with open('backend/models/person_label_map.pkl', 'wb') as f:
+    with open('models/person_label_map.pkl', 'wb') as f:
         pickle.dump(PERSON_LABEL_MAP, f)
     
     print(f"数据集加载完成：共{len(X_raw)}个样本，{len(np.unique(y_posture))}种睡姿，{len(np.unique(y_person))}个人员")
@@ -294,7 +295,8 @@ def predict_single_person(model, pressure_map):
     prediction = model.predict([processed])[0]
     
     # 加载人员标签映射
-    with open('backend/models/person_label_map.pkl', 'rb') as f:
+    # with open('backend/models/person_label_map.pkl', 'rb') as f:
+    with open('models/person_label_map.pkl', 'rb') as f:
         person_map = pickle.load(f)
     
     return person_map.get(int(prediction), "未知人员")
@@ -353,6 +355,9 @@ if __name__ == "__main__":
     print(f"\n人员模型最终测试集准确率：{test_accuracy_per:.4f} ({test_accuracy_per*100:.2f}%)")
     
     # 保存模型
-    os.makedirs('backend/models', exist_ok=True)
-    joblib.dump(posture_model, "backend/models/svm_posture_model.pkl")
-    joblib.dump(person_model, "backend/models/svm_person_model.pkl")
+    # os.makedirs('backend/models', exist_ok=True)
+    os.makedirs('models', exist_ok=True)
+    # joblib.dump(posture_model, "backend/models/svm_posture_model.pkl")
+    joblib.dump(posture_model, "models/svm_posture_model.pkl")
+    # joblib.dump(person_model, "backend/models/svm_person_model.pkl")
+    joblib.dump(person_model, "models/svm_person_model.pkl")

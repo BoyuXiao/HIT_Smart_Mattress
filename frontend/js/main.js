@@ -13,10 +13,11 @@ const heatmapModule = {
 };
 
 const regionModule = {
-    image: document.getElementById('regionImage'),
+    canvas: document.getElementById('regionCanvas'),
     placeholder: document.getElementById('regionPlaceholder'),
     status: document.getElementById('regionStatus')
 };
+const rctx = regionModule.canvas ? regionModule.canvas.getContext('2d') : null;
 
 const resultModule = {
     posture: document.getElementById('postureResult'),
@@ -27,7 +28,7 @@ const resultModule = {
 // 1. 加载人员列表
 async function loadPeople() {
     try {
-        const res = await fetch('http://localhost:5000/api/people');
+        const res = await fetch(`${API_BASE}/api/people`);
         if (!res.ok) throw new Error(`HTTP错误: ${res.status}`);
         
         const data = await res.json();
@@ -77,7 +78,8 @@ function showLoading() {
             <p>正在处理，请稍候...</p>
         `;
         loadingDiv.id = module === heatmapModule ? 'heatmapLoading' : 'regionLoading';
-        module.image.parentNode.appendChild(loadingDiv);
+        const parent = module.canvas ? module.canvas.parentNode : module.image.parentNode;
+        parent.appendChild(loadingDiv);
         loadingDiv.style.display = 'flex';
     });
     
@@ -97,8 +99,10 @@ function resetModules() {
     heatmapModule.image.style.display = 'none';
     heatmapModule.placeholder.style.display = 'block';
     
-    regionModule.image.src = '';
-    regionModule.image.style.display = 'none';
+    if (regionModule.canvas) {
+        regionModule.canvas.style.display = 'none';
+        if (rctx) { rctx.clearRect(0,0,regionModule.canvas.width, regionModule.canvas.height); }
+    }
     regionModule.placeholder.style.display = 'block';
 }
 
@@ -127,7 +131,7 @@ async function startAnalysis() {
     
     try {
         // 步骤1: 生成热力图图片
-        const heatmapRes = await fetch(`http://localhost:5000/api/generate_heatmap_image?person=${person}&posture_id=${postureId}`);
+        const heatmapRes = await fetch(`${API_BASE}/api/generate_heatmap_image?person=${person}&posture_id=${postureId}`);
         if (!heatmapRes.ok) throw new Error(`生成热力图失败: ${heatmapRes.status}`);
         const heatmapData = await heatmapRes.json();
         console.log('热力图接口返回数据:', heatmapData);
@@ -144,7 +148,7 @@ async function startAnalysis() {
         };
         
         // 步骤2: 获取压力矩阵数据（用于预测）
-        const pressureRes = await fetch(`http://localhost:5000/api/heatmap?person=${person}&posture_id=${postureId}`);
+        const pressureRes = await fetch(`${API_BASE}/api/heatmap?person=${person}&posture_id=${postureId}`);
         if (!pressureRes.ok) throw new Error(`获取压力数据失败: ${pressureRes.status}`);
         const pressureData = await pressureRes.json();
         if (pressureData.code !== 200) {
@@ -152,7 +156,7 @@ async function startAnalysis() {
         }
         
         // 步骤3: 调用预测接口
-        const predictRes = await fetch('http://localhost:5000/api/predict_posture', {
+        const predictRes = await fetch(`${API_BASE}/api/predict_posture`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -165,7 +169,7 @@ async function startAnalysis() {
             throw new Error(predictResult.msg || '预测失败');
         }
         
-        const predictPersonRes = await fetch('http://localhost:5000/api/predict_person', {
+        const predictPersonRes = await fetch(`${API_BASE}/api/predict_person`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -178,28 +182,55 @@ async function startAnalysis() {
             throw new Error(predictPersonResult.msg || '人员预测失败');
         }
         
-        // 步骤4: 显示区域划分结果（模拟）
-        setTimeout(() => {
-            regionModule.image.src = `https://picsum.photos/seed/${person}${postureId}/600/400`;
-            regionModule.image.onload = () => {
-                regionModule.image.style.display = 'block';
-                regionModule.placeholder.style.display = 'none';
-                regionModule.status.innerHTML = '<span class="status-ready">已生成</span>';
-                document.getElementById('regionLoading')?.remove();
-            };
-        }, 1000);
+        // 步骤4: 区域划分
+        const regionRes = await fetch(`${API_BASE}/api/predict_regions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ matrix: pressureData.data.matrix })
+        });
+        if (!regionRes.ok) throw new Error(`区域划分失败: ${regionRes.status}`);
+        const regionData = await regionRes.json();
+        if (regionData.code !== 200) throw new Error(regionData.msg || '区域划分失败');
+
+        await drawRegions(regionData.data.boxes);
         
         // 步骤5: 显示预测结果
-        setTimeout(() => {
-            resultModule.posture.textContent = `姿势${predictResult.data.predicted_posture_id}`; // 使用预测结果
-            resultModule.person.textContent = predictPersonResult.data.predicted_person;
-            resultModule.status.innerHTML = '<span class="status-ready">分析完成</span>';
-        }, 1500);
+        resultModule.posture.textContent = `姿势${predictResult.data.predicted_posture_id}`;
+        resultModule.person.textContent = predictPersonResult.data.predicted_person;
+        resultModule.status.innerHTML = '<span class="status-ready">分析完成</span>';
         
     } catch (err) {
         showError('分析过程出错', err.message);
         console.error('分析错误:', err);
     }
+}
+
+async function drawRegions(boxes) {
+    if (!regionModule.canvas || !rctx) return;
+    // 使用已生成的热力图作为背景
+    const bg = new Image();
+    bg.src = document.getElementById('heatmapImage').src;
+    await new Promise((resolve) => { bg.onload = resolve; });
+    regionModule.canvas.width = bg.width;
+    regionModule.canvas.height = bg.height;
+    rctx.clearRect(0,0,regionModule.canvas.width, regionModule.canvas.height);
+    rctx.drawImage(bg, 0, 0, regionModule.canvas.width, regionModule.canvas.height);
+
+    const sx = regionModule.canvas.width / 26.0;
+    const sy = regionModule.canvas.height / 40.0;
+    rctx.lineWidth = 2;
+    rctx.strokeStyle = 'red';
+    boxes.forEach(([x1,y1,x2,y2]) => {
+        const rx = Math.round(x1 * sx);
+        const ry = Math.round(y1 * sy);
+        const rw = Math.round((x2 - x1) * sx);
+        const rh = Math.round((y2 - y1) * sy);
+        rctx.strokeRect(rx, ry, rw, rh);
+    });
+    regionModule.canvas.style.display = 'block';
+    regionModule.placeholder.style.display = 'none';
+    regionModule.status.innerHTML = '<span class="status-ready">已生成</span>';
+    document.getElementById('regionLoading')?.remove();
 }
 
 // 绑定事件

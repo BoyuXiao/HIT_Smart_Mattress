@@ -5,6 +5,7 @@ import os
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from model import load_trained_model, predict_single_pressure_map, predict_single_person
+import onnxruntime as ort
 
 
 app = Flask(__name__)
@@ -13,7 +14,8 @@ CORS(app)  # 解决跨域问题
 # 模型输出数据根目录
 MODEL_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "model_output")
 # 前端静态文件目录（图片要存在这里，前端才能访问）
-FRONTEND_STATIC_DIR = os.path.join(os.path.dirname(__file__), "../frontend/static")
+FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "../frontend")
+FRONTEND_STATIC_DIR = os.path.join(FRONTEND_DIR, "static")
 # 图片在前端静态目录下的子目录（按人员分类）
 HEATMAP_IMAGE_DIR = os.path.join(FRONTEND_STATIC_DIR, "heatmap_images")
 os.makedirs(HEATMAP_IMAGE_DIR, exist_ok=True)  # 确保目录存在
@@ -21,13 +23,33 @@ os.makedirs(HEATMAP_IMAGE_DIR, exist_ok=True)  # 确保目录存在
 
 try:
     # 加载两个模型
-    posture_model = load_trained_model("backend/models/svm_posture_model.pkl")
-    person_model = load_trained_model("backend/models/svm_person_model.pkl")
+    # posture_model = load_trained_model("backend/models/svm_posture_model.pkl")
+    # person_model = load_trained_model("backend/models/svm_person_model.pkl")
+    posture_model = load_trained_model("models/svm_posture_model.pkl")
+    person_model = load_trained_model("models/svm_person_model.pkl")
     print("两个模型加载成功，可进行预测")
 except Exception as e:
     print(f"模型加载失败：{e}")
     posture_model = None
     person_model = None
+
+# 区域回归模型（ONNX）
+REGION_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models/region_regressor.onnx")
+REG_IMG_H, REG_IMG_W = 128, 128
+
+def _resize(img, h, w):
+    import cv2
+    return cv2.resize(img.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
+
+region_sess = None
+try:
+    so = ort.SessionOptions()
+    # 若设备已安装 Ascend EP，可改为：["AscendExecutionProvider", "CPUExecutionProvider"]
+    providers = ["CPUExecutionProvider"]
+    region_sess = ort.InferenceSession(REGION_MODEL_PATH, so, providers=providers)
+    print("区域回归模型加载成功")
+except Exception as e:
+    print(f"区域模型加载失败：{e}")
 
 # 接口1：获取所有人员列表（不变）
 @app.route("/api/people", methods=["GET"])
@@ -81,10 +103,13 @@ def generate_heatmap_image():
         file_path = os.path.join(MODEL_OUTPUT_DIR, person, f"posture_{posture_id}.npy")
         pressure_matrix = np.load(file_path).astype(np.float32)
 
-        # 2. 绘制并保存热力图到前端静态目录
-        plt.figure(figsize=(10, 8))
-        plt.imshow(pressure_matrix, cmap=cm.jet)
-        plt.colorbar()
+        # 2. 绘制并保存热力图到前端静态目录（关闭插值，按网格显示）
+        plt.figure(figsize=(5, 8), dpi=120)
+        ax = plt.gca()
+        im = ax.imshow(pressure_matrix, cmap=cm.jet, interpolation='nearest', aspect='auto', origin='upper')
+        plt.colorbar(im, fraction=0.046, pad=0.04)
+        ax.set_xticks([]); ax.set_yticks([])
+        plt.tight_layout()
         # plt.title(f"人员 {person} - 姿势 {posture_id}")
 
         # 按人员创建子目录（避免重名）
@@ -92,7 +117,7 @@ def generate_heatmap_image():
         os.makedirs(person_image_dir, exist_ok=True)
         image_name = f"posture_{posture_id}.png"
         image_path = os.path.join(person_image_dir, image_name)
-        plt.savefig(image_path, bbox_inches="tight")
+        plt.savefig(image_path, bbox_inches="tight", pad_inches=0.02)
         plt.close()
 
         # 3. 拼接前端可访问的图片URL
@@ -114,6 +139,21 @@ def generate_heatmap_image():
 @app.route("/static/heatmap_images/<path:filename>")
 def serve_heatmap_image(filename):
     return send_from_directory(HEATMAP_IMAGE_DIR, filename)
+
+# 新增：服务前端页面与静态资源，避免访问/时404
+@app.route("/")
+def serve_index():
+    return send_from_directory(FRONTEND_DIR, "index.html")
+
+@app.route("/js/<path:filename>")
+def serve_js(filename):
+    js_dir = os.path.join(FRONTEND_DIR, "js")
+    return send_from_directory(js_dir, filename)
+
+@app.route("/css/<path:filename>")
+def serve_css(filename):
+    css_dir = os.path.join(FRONTEND_DIR, "css")
+    return send_from_directory(css_dir, filename)
 
 # 新增：睡姿预测接口
 @app.route("/api/predict_posture", methods=["POST"])
@@ -167,6 +207,41 @@ def predict_person():
         })
     except Exception as e:
         return jsonify({"code": 500, "msg": f"人员预测失败：{str(e)}"})
+
+@app.route("/api/predict_regions", methods=["POST"])
+def predict_regions():
+    if region_sess is None:
+        return jsonify({"code": 500, "msg": "区域模型未加载成功"})
+    data = request.json or {}
+    if "matrix" in data:
+        mat = np.array(data["matrix"], dtype=np.float32)
+    else:
+        person = data.get("person")
+        posture_id = data.get("posture_id")
+        if not person or not posture_id:
+            return jsonify({"code": 400, "msg": "缺少matrix或(person, posture_id)"})
+        file_path = os.path.join(MODEL_OUTPUT_DIR, person, f"posture_{posture_id}.npy")
+        if not os.path.exists(file_path):
+            return jsonify({"code": 404, "msg": "未找到对应压力矩阵"})
+        mat = np.load(file_path).astype(np.float32)
+
+    if mat.shape != (40, 26):
+        return jsonify({"code": 400, "msg": f"压力矩阵形状错误，应为(40,26)，实际为{mat.shape}"})
+
+    # 归一化并缩放
+    min_v, max_v = float(np.min(mat)), float(np.max(mat))
+    if max_v - min_v > 1e-6:
+        mat = (mat - min_v) / (max_v - min_v)
+    img = _resize(mat, REG_IMG_H, REG_IMG_W)[None, None, ...].astype(np.float32)
+
+    out = region_sess.run(["boxes"], {"input": img})[0][0]  # 24
+    boxes = out.reshape(-1, 4)
+    boxes[:, [0, 2]] *= 26.0
+    boxes[:, [1, 3]] *= 40.0
+    boxes = np.clip(boxes, [0, 0, 0, 0], [25.999, 39.999, 25.999, 39.999])
+    boxes = boxes.round().astype(int).tolist()
+
+    return jsonify({"code": 200, "data": {"boxes": boxes}, "msg": "ok"})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

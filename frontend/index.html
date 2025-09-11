@@ -64,11 +64,10 @@
                 </div>
                 <div class="module-content">
                     <div class="image-container">
-                        <img id="regionImage" src="" alt="区域划分结果将在这里显示" class="result-image">
+                        <canvas id="regionCanvas" width="600" height="400" class="result-image"></canvas>
                         <div class="image-placeholder" id="regionPlaceholder">
                             <i class="fas fa-map fa-5x"></i>
                             <p>点击"开始分析"按钮，后端将生成区域划分结果</p>
-                            <p class="text-muted">(功能开发中)</p>
                         </div>
                     </div>
                 </div>
@@ -102,6 +101,7 @@
         </div>
     </div>
 
+    <script src="./js/config.js"></script>
     <script src="./js/main.js"></script>
 </body>
 </html>
